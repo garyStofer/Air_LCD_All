@@ -1,3 +1,4 @@
+
 /*************************************************************************
 * Title:    I2C master library using hardware TWI interface
 * Author:   Peter Fleury <pfleury@gmx.ch>  http://jump.to/fleury
@@ -6,6 +7,8 @@
 * Target:   any AVR device with hardware TWI
 * Usage:    API compatible with I2C Software Library i2cmaster.h
 **************************************************************************/
+#include "build_opts.h"
+#ifdef  WITH_BARO_HYG_TEMP 
 #include <inttypes.h>
 #include <compat/twi.h>
 
@@ -223,4 +226,5 @@ unsigned char i2c_readNak(void)
   return TWDR;
 
 }/* i2c_readNak */
+#endif
 

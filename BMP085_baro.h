@@ -8,14 +8,19 @@
 #include "Arduino.h"
 #include "i2cmaster.h"
 #include "Atmos.h"
+#include "build_opts.h"
+#define hPaToInch( hPa ) (hPa  * 0.02952998) // Conversion factor to inches Hg at 32F -- number and precision from Wikipedia 
+#define CtoF( tC ) ( tC / 0.5555555555 +32)
+#define MtoFeet( meters) (meters *3.28084)
+
+#ifdef  WITH_BARO_HYG_TEMP 
+
 
 
 #ifndef BMP085_BARO_H
 #define	BMP085_BARO_H
 
-#define hPaToInch( hPa ) (hPa  * 0.02952998) // Conversion factor to inches Hg at 32F -- number and precision from Wikipedia 
-#define CtoF( tC ) ( tC / 0.5555555555 +32)
-#define MtoFeet( meters) (meters *3.28084)
+
 
 #ifdef	__cplusplus
 extern "C" {
@@ -41,5 +46,6 @@ extern void Alt_Setting_adjust( void );
 #endif
 
 #endif	/* BMP085_BARO_H */
+#endif
 
 

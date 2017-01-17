@@ -8,6 +8,7 @@
  
 #include "Arduino.h"
 #include "i2cmaster.h"
+#include "build_opts.h"
 
 #ifndef TMP100_H
 #define	TMP100_H

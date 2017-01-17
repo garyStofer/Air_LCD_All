@@ -6,8 +6,9 @@
  */
 
 /* Functions to initialzie and read the SI 7021 Relative humidity sensor device */
-
 #include "SI_7021.h"
+#ifdef  WITH_BARO_HYG_TEMP 
+
 
 //////////////////////////////////////////// Humidity sensor SI 7021 //////////////////////
 
@@ -141,4 +142,4 @@ SI7021_Read_Process(void )
     }
 
 }
-
+#endif

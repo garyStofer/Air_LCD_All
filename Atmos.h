@@ -12,6 +12,12 @@
 #ifndef Atmosphere_H
 #define	Atmosphere_H
 #define STD_ALT_SETTING 1013.25
+//With a Temp-Dewpoint delta of less that 3degC (~5degF) you can expect fog, so I set the default for the alarm a bit higher than that.
+#define TD_DELTA_ALARM  4.0 // in degC when the alarm is to come on
+#define VOLT_LOW_ALARM 10.0
+#define VOLT_HIGH_ALARM 15.0
+#define FREEZE_ALARM 1.0
+
 #ifdef	__cplusplus
 extern "C" {
 #endif

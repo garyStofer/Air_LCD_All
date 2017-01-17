@@ -9,7 +9,7 @@ Created on JAN 18, 2016, 5.25 PM
 /* Functions to initialzie and read the TMP100 temperatur sensor  */
 
 #include "TMP100.h"
-
+#ifdef  WITH_BARO_HYG_TEMP 
 //////////////////////////////////////////// Humidity sensor SI 7021 //////////////////////
 
 #define TMP100_ADDR 0x94		// This is with ADD0 strapped high and ADD1 pulled low	
@@ -139,4 +139,5 @@ TMP100_Read_Process(void )
 	}
 
 }
+#endif
 

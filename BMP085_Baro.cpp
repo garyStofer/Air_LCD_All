@@ -1,4 +1,5 @@
 #include "BMP085_baro.h"
+#ifdef  WITH_BARO_HYG_TEMP 
 #include <avr/wdt.h>
 #include <LiquidCrystal.h>
 
@@ -286,4 +287,5 @@ Alt_Setting_adjust( void )
         }
 
 }
+#endif
 

@@ -8,6 +8,7 @@
  
 #include "Arduino.h"
 #include "i2cmaster.h"
+#include "build_opts.h"
 
 #ifndef SI_7021_H
 #define	SI_7021_H

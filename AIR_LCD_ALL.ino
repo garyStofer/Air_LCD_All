@@ -1,13 +1,16 @@
-// Sketch to read Bosh BMP085/ BMP180 and SI_7021 hygrometer and display various aviation relatred readings on 8x2 lcd display
-// Optionally allows the reading of wind direction and speed indicators. See #define WITH_WIND
+// Sketch to read various sensors including Bosh BMP085/ BMP180 and SI_7021 hygrometer and display readings on 8x2 lcd display 
+// using a quadrature encoder knob to switch between the individual displays.
+
+// See file build_opt.h for #defines to enable individual measurments and their display
 
 
-// Warning : This sketch needs to be compiled and run on a device with Optiboot since the watchdog doesn't work under std BL
+// Warning : This sketch needs to be compiled and run on a device with Optiboot since the watchdog doesn't work under the standard Bootloader.
 // NOTE : Before uploading sketch make sure that the Board type is set to OPTIBOOT on a 32 Pin CPU -- otherwise the programmer runs at the wronng baud rate
 
 // Last compiled and tested with Arduino IDE 1.6.6
 
 #include "build_opts.h"		// Controls build time features
+
 #include <LiquidCrystal.h>
 #include <EEPROM.h>
 #ifdef WITH_SD_CARD
@@ -23,48 +26,54 @@
 #include "NTC.h"
 #include "RC_Servo.h"
 #include "AOA.h"
+#include "Encoder.h"
 
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  BUILD OPTIONS  see file build_opt.h   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
 
 #define LCD_COLS 8
 #define LCD_ROWS 2
+#define LINE1 0
+#define LINE2 1
+/*
+// lcd special char
+byte specialchar[8] = {
+  0B00000,
+  0B11111,
+  0B11111,
+  0B11111,
+  0B11111,
+  0B11111,
+  0B11111,
+  0B00000
+};
+lcd.createChar(7, specialchar);  // 0 thyrough 7
+...
+  lcd.write(7);
+*/
 
-//With a Temp-Dewpoint delta of less that 3degC (~5degF) you can expect fog, so I set the default for the alarm a bit higher than that.
-#define TD_DELTA_ALARM  4.0 // in degC when the alarm is to come on
-#define VOLT_LOW_ALARM 6.5
-#define VOLT_HIGH_ALARM 15.0
-#define FREEZE_ALARM 1.0
 
 
-// The pin definitions are as per obfuscated Arduino pin defines -- see aka for ATMEL pin names as found on the MEGA328P spec sheet
-#define Enc_A_PIN 2     // This generates the interrupt, providing the click  aka PD2 (Int0)
-#define Enc_B_PIN 14    // This is providing the direction aka PC0,A0
-#define Enc_PRESS_PIN 3 // aka PD3 ((Int1)
-#define Enc_DIRECTION (-1)  // polarity of encoder , either -1 or +1 depending on the phase relation of the two signals in regard of the turn direction
-
-#ifdef ALARM_A
-#define LED1_PIN 10     // aka PB2,SS
-#endif
-
-#ifndef WITH_SERVO      // Servo pulse pin has to be on PC3 because SD card interface uses all remaining digital pins (miso,mosi,sclk,SS)
-#define LED2_PIN 17     // aka PC3,A3
-#endif
-
-#define VBUS_ADC 7      // ADC7
 #define VBUS_ADC_BW  (5.0*(14+6.8)/(1024*6.8))    //adc bit weight for voltage divider 14.0K and 6.8k to gnd.
 
 #define UPDATE_PER 500   // in ms second, this is the measure interval and also the LCD update interval
-
-#define LONGPRESS_TIMEOUT 50000 // Note: not in milli seconds since this is used in a SW while loop timer
-
 #define KMpMILE 0.62137119
 
+// units for display
+#define FAR "F" 
+#define CEL "C"
+#define KMH "KMH    "
+#define MPH "MPH    "
+#define Meter " M     "
+#define Feet  " ft    "
+#define DegSym (char(223))  // degree symbol display character for LCD
+#define DeltaSym ( char(7))
+#define UpSym ( char(6))
+#define DownSym ( char(5))
 
 enum Displays {
   DISPLAY_BEGIN =0,
- 
-#ifdef V_BUS
+ #ifdef V_BUS
   V_Bus,
 #endif
 #ifdef WITH_BARO_HYG_TEMP
@@ -86,7 +95,7 @@ enum Displays {
   Wind_AVG,
   Wind_GST,
 #else
-  #ifdef bWITH_RPM
+  #ifdef WITH_RPM
     RPM,
   #endif 
 #endif
@@ -104,12 +113,8 @@ enum Displays {
   DISP_END        // this must be the last entry
 };
 
-// Globals for rotary encoder
-char EncoderCnt = DISPLAY_BEGIN+1;  // Default startup display -- can be set to any valid Display Enum value
-char EncoderPressedCnt = 0;
-char EncoderDirection = -1; // So that it decremets to a valid display in case the default display is not currently valid due to sensor lacking
-unsigned char ShortPressCnt = 0;
-unsigned char LongPressCnt = 0;
+ 
+
 static bool MetricDisplay = false;
 
 
@@ -130,94 +135,79 @@ File dataFile;
 // Contrast control simply using a PWM doesn't work because the PWM needs to be filtered with a R-C, but the LCD itself is pulling the LCD control
 // input up, so the R-C from the MCU would have to be relatively low in impendance <300ohms, making for a big capacitor and lots of current
 // Would have to feed the filtered voltage into an OP-Amp to drive the LCD input properly.
-// For now the hardware has a resistor pair that sets the contrast .
-/*
+// For now the hardware has a resistor pair that sets the contrast.
 
-
-  This ISR handles the reading of a quadrature encoder knob and inc or decrements  two global encoder variables
-  depending on the direction of the encoder and the state of the button. The encoder functions at 1/4 the maximal possible resolution
-  and generally provides one inc/dec per mechanical detent.
-
-  One of the quadrature inputs is used to trigger this interrupt handler, which checks the other quadrature input to decide the direction.
-  It is assumed that the direction  quadrature signal is not bouncing while the first phase is causing the initial interrupt as it's signal
-  is 90deg opposed.  RC filtering of the contacts is required.
-
-  Three encoder count variables are being modified by this ISR
-  1) EncoderCnt increments or dewcrements when the knob is turned without the button being press
-  2) EncoderPressCnt increments or decrements when the knob is  turned while the button is also pressed.
-  This happens only after a LONG press timeout
-  3) EncoderDirection either +1 or -1 depending on the direction the user turned the knob last
-*/
-void ISR_KnobTurn( void)
-{
-  if ( digitalRead( Enc_B_PIN ) )
-    EncoderDirection = Enc_DIRECTION;
-  else
-    EncoderDirection = -Enc_DIRECTION;
-
-  if ( digitalRead( Enc_PRESS_PIN ) )
-    EncoderCnt += EncoderDirection;
-  else
-    EncoderPressedCnt += EncoderDirection;
-
-}
-
-
-/*
-  ISR to handle the button press interrupt.
-
-  Two modes of button presses are recognized. A short, momentary press and a long, timing-out press.
-  While the hardware de bounced button signal is sampled for up to TIMEOUT time in this ISR no other code is being executed. If the time-out occurs
-  a long button press-, otherwise a short button press is registered. Timing has to be done by a software counter since interrupts are disabled
-  and function millis() and micros() don't work during this time.
-  Software timing is CPU clock dependent and therefore has to be adjusted to the clock frequency.
-*/
-void ISR_ButtonPress(void)
-{
-  volatile unsigned long t = 0;
-  while ( !digitalRead( Enc_PRESS_PIN ))
-  {
-    if (t++ > LONGPRESS_TIMEOUT)
-    {
-      LongPressCnt++;
-      return;
-    }
-  }
-  ShortPressCnt++;
-}
 
 
 // The Arduino IDE Setup function -- called once upon reset
 void setup()
 {
   unsigned err;
+  // lcd special characters
+byte DeltaChar[8] = {
+
+  0B00000,
+  0B00000,
+  0B00100,
+  0B01010,
+  0B10001,
+  0B11111,
+  0B00000,
+  0B00000
+};
+/*
+byte DeltaChar2[8] = {
+  
+  0B10000,
+  0B11000,
+  0B10100,
+  0B10010,
+  0B10100,
+  0B11000,
+  0B10000,
+  0B00000
+};
+*/
+byte UpChar[8] = {
+  0B00100,
+  0B01110,
+  0B11111,
+  0B00100,
+  0B00100,
+  0B00100,
+  0B00100,
+  0B00000
+};
+
+byte DownChar[8] = {
+  0B00100,
+  0B00100,
+  0B00100,
+  0B00100,
+  0B11111,
+  0B01110,
+  0B00100,
+  0B00000
+};
+
 
   // Setup the Encoder pins to be inputs with pullups
   pinMode(Enc_A_PIN, INPUT);    // Use external 10K pullup and 100nf to gnd for debounce
   pinMode(Enc_B_PIN, INPUT);    // Use external 10K pullup and 100nf to gnd for debounce
   pinMode(Enc_PRESS_PIN, INPUT);// Use external 10K pullup and 100nf to gnd for debounce
 
-  #ifdef ALARM_A
-  pinMode(LED1_PIN, OUTPUT);
-  digitalWrite( LED1_PIN, HIGH);
-  #endif
+  // The two LEDs 
+  pinMode(LED2_PIN, OUTPUT);    // BLUE
+  digitalWrite( LED2_PIN, LOW); // also shared with servo
 
-  #ifndef WITH_SERVO
-  pinMode(LED2_PIN, OUTPUT);
-  digitalWrite( LED2_PIN, HIGH);
-  #endif
-
-  // the i2c pins -- I2C mode will overwrite this
-  pinMode(18, INPUT);   // SDA
-  pinMode(19, OUTPUT);  // SCL
-  digitalWrite( 18, LOW);
-  digitalWrite( 19, LOW);
+  pinMode(LED1_PIN, OUTPUT);    // RED
+  digitalWrite( LED1_PIN, LOW);
 
   attachInterrupt(0, ISR_KnobTurn, FALLING);    // for the rotary encoder knob rotating
   attachInterrupt(1, ISR_ButtonPress, FALLING);    // for the rotary encoder knob push
 
 #ifdef WITH_SERVO
-  ServoSetup();
+  ServoSetup(LED2_PIN);   // The servo pulse pin is shared with the blue LED, when servo is commanded the LED lights up 
 #endif
 
 #ifdef WITH_WIND
@@ -238,12 +228,20 @@ void setup()
   lcd.begin(LCD_COLS, LCD_ROWS);              // initialize the LCD columns and rows
 
   lcd.home ();                   // go home
-  lcd.print("AIR-LCD ");
+ // lcd.print("AIR-LCD ");
+  lcd.print("OIL TEMP ");
   lcd.setCursor ( 0, 1 );
   lcd.print("Display");
-
+  lcd.createChar(DeltaSym, DeltaChar);  
+  lcd.createChar(UpSym, UpChar);  
+  lcd.createChar(DownSym, DownChar); 
+  
 #ifdef WITH_BARO_HYG_TEMP
-
+  // the i2c pins -- I2C mode will overwrite this
+  pinMode(18, INPUT);   // SDA
+  pinMode(19, OUTPUT);  // SCL
+  digitalWrite( 18, LOW);
+  digitalWrite( 19, LOW);
   if ( (err = BMP085_init()) != 0)
   {
     lcd.setCursor ( 0, 0 );
@@ -275,6 +273,12 @@ void setup()
       No_TMP100 = false;
     }
   }
+#else 
+  #ifdef WITH_SD_CARD
+    #define SD_SS_PIN 19
+    pinMode(SD_SS_PIN, OUTPUT);  // SCL used as SS pin on SD card -- I2c and SD card can not operate at the same time
+    digitalWrite( SD_SS_PIN, LOW);
+  #endif
 #endif
 
 #if defined (WITH_WIND) || defined( WITH_RPM)  || defined(WITH_AOA) || !defined  WITH_BARO_HYG_TEMP
@@ -288,14 +292,16 @@ void setup()
 
  
 #ifdef WITH_SD_CARD
-#define SD_CARD_SS_PIN 10
-  if (  SD.begin(SD_CARD_SS_PIN) )
+#define SD_RECORD_PER 60
+  if (  SD.begin(SD_SS_PIN) ) // the Slave Select pin is shared with SCL from I2C, therefore SD and I2C are mutually exclusive
   {
     dataFile = SD.open("datalog.txt", FILE_WRITE);
    
     if (dataFile) 
     {
-      dataFile.println("Logger Start");
+      dataFile.print("Logger Start -- recording NTC temps every ");
+      dataFile.print(SD_RECORD_PER);
+      dataFile.println(" Seconds");
       dataFile.flush();
     }
 #ifdef DEBUG    
@@ -310,8 +316,8 @@ void setup()
   
   if (!dataFile)
   {
-    digitalWrite( SD_CARD_SS_PIN, LOW);   // Turn SS low,  LED  off
-    lcd.setCursor ( 0, 0 );
+    digitalWrite( SD_SS_PIN, LOW);   // Turn SS low,  LED  off
+    lcd.setCursor ( 0, 1 );
     lcd.print("NoSDcard");
     delay(1000);        
   }
@@ -324,26 +330,33 @@ void setup()
   TMP100_startMeasure( );
 #endif
 
+
   EEPROM.get( 0, MetricDisplay);
-
- 
-
-  #ifndef WITH_SERVO
-  digitalWrite( LED2_PIN, LOW);
-  #endif
-
 
 }
 
-// units for display
-#define FAR "F      " 
-#define CEL "C      "
-#define KMH "KMH    "
-#define MPH "MPH    "
-#define Meter " M     "
-#define Feet  " ft    "
-#define DegSym (char(223))  // degree symbol
+// checkes if a Long button press was issued and switches the EEprom and Metric display global.
+void CheckToggleMetric( void )  
+{
+      if (LongPressCnt)   // toggle between imperial and metric display
+      {
+        if ( MetricDisplay != 0 )
+          MetricDisplay = 0;
+        else
+          MetricDisplay = 1;
 
+        EEPROM.put( 0, MetricDisplay);
+        LongPressCnt = 0;
+      }
+}
+
+void lcdPrintUnits(char ln, char Sym, char * units)
+{
+        lcd.print("      ");     
+        lcd.setCursor ( 6, ln );
+        lcd.print(Sym); 
+        lcd.print(units);  
+}
 // The Arduino IDE loop function -- Called contineously
 void loop()
 {
@@ -357,6 +370,7 @@ void loop()
   static bool REDledAlarm = false;
   static unsigned long t = millis();
   static unsigned loop_count =0;
+  static unsigned timeout =0;
   int axa;
   char * units = "";
  
@@ -369,6 +383,8 @@ void loop()
 
 
   wdt_reset();
+
+ 
 
 #ifdef WITH_WIND
   WindRead();
@@ -408,16 +424,7 @@ void loop()
     Temp_C = -300.0 ;  // Impossible value, will never be displayed
 #endif
 
-#ifdef ALARMS_A
-  // Alarms -- Turn the red light on and switch to the alarming display, TD-Alarm has priority over voltage
-  if (Vbus_Volt < VOLT_LOW_ALARM  || Vbus_Volt > VOLT_HIGH_ALARM )
-  {
-    if (! REDledAlarm)
-      EncoderCnt = V_Bus;     // switch to the Alarming display once
 
-    REDledAlarm = true;
-
-  }
 #ifdef WITH_BARO_HYG_TEMP
   if ( TD_deltaC < TD_DELTA_ALARM)
   {
@@ -428,12 +435,14 @@ void loop()
   }
 
   // This alarm illuminates the blue LED, but doesn't lock the display to it
+  /*
   if (Temp_C < FREEZE_ALARM )
     digitalWrite( LED2_PIN, HIGH);
   else
     digitalWrite( LED2_PIN, LOW);
+    */
 #endif
-#endif
+ 
 
   // Start of the individual readings display
   lcd.home(  );  // Don't use LCD clear because of screen flicker
@@ -461,15 +470,22 @@ re_eval:
   {
 #ifdef V_BUS
     case V_Bus:
+      if (timeout == 0 )
+        timeout = loop_count + 10;
+        
       adc_val = analogRead(VBUS_ADC);
       Vbus_Volt = adc_val * VBUS_ADC_BW;
       lcd.print("Voltage ");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       lcd.print( Vbus_Volt ) ;
       lcd.print(" V  ");
-      if (Vbus_Volt > VOLT_LOW_ALARM  && Vbus_Volt < VOLT_HIGH_ALARM )
+      if (Vbus_Volt > VOLT_HIGH_ALARM  || Vbus_Volt < VOLT_LOW_ALARM )
       {
-        REDledAlarm = false;
+        REDledAlarm = true;
+      }
+      if (loop_count > timeout )
+      {
+        EncoderCnt++; 
       }
       break;
 #endif
@@ -481,7 +497,7 @@ re_eval:
         goto re_eval;
       }
       lcd.print("Dens Alt");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       if (MetricDisplay)
       {
         rounded = DensityAlt(BaroReading.BaromhPa, BaroReading.TempC) + 0.5;
@@ -514,7 +530,7 @@ re_eval:
       }
 
       lcd.print(" Alt *  ");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, 1LINE2 );
 
       if (MetricDisplay)
       {
@@ -537,7 +553,7 @@ re_eval:
         goto re_eval;
       }
       lcd.print("Pressure");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
 
       if (MetricDisplay)
       {
@@ -558,7 +574,7 @@ re_eval:
         goto re_eval;
       }
       lcd.print("Humidity");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       rounded = HygReading.RelHum  + 0.5;
       lcd.print( rounded  );
       lcd.print(" % RH  ");
@@ -571,19 +587,10 @@ re_eval:
         goto re_eval;
       }
 
-      if (LongPressCnt)   // toggle between imperial and metric display
-      {
-        if ( MetricDisplay != 0 )
-          MetricDisplay = 0;
-        else
-          MetricDisplay = 1;
-
-        EEPROM.put( 0, MetricDisplay);
-        LongPressCnt = 0;
-      }
+      CheckToggleMetric();
 
       lcd.print(" Temp * ");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       if ( MetricDisplay)
       {
         units = CEL;
@@ -595,8 +602,7 @@ re_eval:
         result =  CtoF( Temp_C);
       }
       lcd.print(result );
-      lcd.print(DegSym); // degree symbol
-      lcd.print(units);
+      lcdPrintUnits(LINE2,DegSym,units);
       break;
 
 
@@ -607,7 +613,7 @@ re_eval:
         goto re_eval;
       }
       lcd.print("DewPoint");
-      lcd.setCursor ( 0, 1 );
+      
 
       if (MetricDisplay)
       {
@@ -619,10 +625,10 @@ re_eval:
         rounded = CtoF(dewptC) + 0.5;
         units = CEL;
       }
-      
+
+      lcd.setCursor ( 0, LINE2 );
       lcd.print( rounded );
-      lcd.print(DegSym)); // degree symbol
-      lcd.print(units);
+      lcdPrintUnits(LINE2,DegSym,units);
       break;
 
 #ifdef WetBulbTemp
@@ -636,7 +642,7 @@ re_eval:
       }
 
       lcd.print("Wet Bulb");
-      lcd.setCursor ( 0, 1 );
+       
       if ( No_Baro)
         result = T_wetbulb_C(Temp_C, 942.0, HygReading.RelHum); // in the absence of a Barometer reading I take the pressure at ~2000ft in standard Atmos.
       else
@@ -648,12 +654,13 @@ re_eval:
       }
       else
       {
-        units = FAR
+        units = FAR;
         result =  CtoF(result);
       }
+      
+      lcd.setCursor ( 0, LINE2 );
       lcd.print( result );
-      lcd.print(DegSym)); // degree symbol
-      lcd.print(units);
+      lcdPrintUnits(LINE2,DegSym,units);
       break;
 #endif
 
@@ -664,7 +671,6 @@ re_eval:
         goto re_eval;
       }
       lcd.print("TDspread");
-      lcd.setCursor ( 0, 1 );
 
       if (MetricDisplay)
       {
@@ -676,10 +682,10 @@ re_eval:
         rounded = (CtoF(Temp_C) - CtoF(dewptC)) + 0.5; // for deg F
         units = FAR;
       }
-
+      
+      lcd.setCursor ( 0, LINE2 );
       lcd.print( rounded );
-      lcd.print(DegSym)); // degree symbol
-      lcd.print(units);
+      lcdPrintUnits(LINE2,DegSym,units);
       
       if ( TD_deltaC > TD_DELTA_ALARM)
         REDledAlarm = false;            // turn alarm off
@@ -688,7 +694,7 @@ re_eval:
 #ifdef WITH_WIND
     case Wind_SPD:
       lcd.print("Wind SPD");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       if (MetricDisplay)
       {
         lcd.print( WindSpdMPH * KMpMILE);
@@ -704,7 +710,7 @@ re_eval:
 
     case Wind_GST:
       lcd.print("Wind GST");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       if (MetricDisplay)
       {
         lcd.print( WindGustMPH * KMpMILE);
@@ -719,7 +725,7 @@ re_eval:
 
     case Wind_AVG:
       lcd.print("Wind AVG");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       if ( MetricDisplay)
       {
         lcd.print( WindAvgMPH * KMpMILE);
@@ -742,7 +748,7 @@ re_eval:
       }
 
       lcd.print("Wnd DIR*");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       lcd.print( WindDir);
       lcd.print(" ");
       lcd.print(DegSym); // degree symbol
@@ -755,7 +761,7 @@ re_eval:
 #ifdef WITH_RPM
     case RPM:
       lcd.print("  RPM   ");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       lcd.print( RPM_);
       lcd.print("      ");
       break;
@@ -768,7 +774,7 @@ re_eval:
 
       axa = V_AOA + 0.5;
       lcd.print("  AOA  ");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       
       if (axa > 0)
         lcd.print("+");
@@ -791,19 +797,17 @@ re_eval:
 #endif
 
 #ifdef WITH_NTC
+#define OIL_TEMP_ALARM 230    // when the red light comes on, in deg F
+#define TrendTime 80          //  trend window in 1/2 seconds intervals , i.e. 100 == 50 seconds
+#define TrendHysteresis 10    // in 1/10 deg C makes a hysteresis for the temp trend check, applies + and - , i.e 10 is +- 1 degree 
     case NTC:
     {
-      static bool disp_Delta = false;
-      if (LongPressCnt)   // toggle between imperial and metric display
-      {
-        if ( MetricDisplay != 0 )
-          MetricDisplay = 0;
-        else
-          MetricDisplay = 1;
-
-        EEPROM.put( 0, MetricDisplay);
-        LongPressCnt = 0;
-      }
+      static bool disp_Delta = true;
+      static int prev_reading ;  // two vars for trend display 
+      static int curr_reading ;
+      char trend = ' ';
+      
+      CheckToggleMetric();
 
       if (ShortPressCnt != PrevShortPressCnt)   // entering setup
       {
@@ -814,43 +818,59 @@ re_eval:
       result2 = ntcRead(NTC2_R25C, NTC2_BETA, NTC2_ADC);
       result3 = ntcRead(NTC3_R25C, NTC3_BETA, NTC3_ADC);
       
+      if (loop_count % TrendTime == 0)
+      {
+        prev_reading = curr_reading;
+        curr_reading = (int) result3 *10 ;      // Trend must be taken from the 3rd probe that's immersed in oil for fast response
+      }
+      
+      if (curr_reading > prev_reading+TrendHysteresis) 
+          trend =UpSym;
+      else if (curr_reading < prev_reading-TrendHysteresis)
+        trend = DownSym;
+        
+      if (OIL_TEMP_ALARM > CtoF( result3))
+        REDledAlarm = false;
+      else
+        REDledAlarm = true;  
+        
       if (MetricDisplay)
       {
          units = CEL;
       }
       else
       {
+        units = FAR;
         result = CtoF( result);
         result2 = CtoF( result2);
         result3 = CtoF( result3);
-        units = FAR;
       }
-           
+     
       if (disp_Delta == false )
       {
-        lcd.print(result);
-        lcd.print(DegSym); // degree symbol
-        lcd.print(units);  
-        lcd.setCursor ( 0, 1 );
-        lcd.print(result2);
-        lcd.print(DegSym); // degree symbol
-        lcd.print(units); 
+        lcd.print(result,1);
+        lcdPrintUnits(LINE1,DegSym,units);
+        
+        lcd.setCursor ( 0, LINE2 );
+        lcd.print(result2,1);
+        lcdPrintUnits(LINE2,DegSym,units);
       } 
       else
       {  
-        lcd.print(result3);
-        lcd.print(DegSym); // degree symbol
-        lcd.print(units);  
-        lcd.setCursor ( 0, 1 );
-        lcd.print(result - result2);
-        lcd.print(char(218)); // delta sym
-        lcd.print(units); 
+        lcd.print(result3,1);
+        lcd.print(trend);
+        lcdPrintUnits(0,DegSym,units); 
+          
+        lcd.setCursor ( 0, LINE2 );
+        lcd.print(result - result2,1);
+        lcdPrintUnits(LINE2,DeltaSym,units);
+ 
       }
       
      
 #ifdef WITH_SD_CARD  
-      // store readings every 60 seconds in SD card
-      if (loop_count % (1000/UPDATE_PER * 60 )   == 0  && dataFile  )
+      // store readings every SD_RECORD_PER seconds in SD card
+      if (loop_count % (1000/UPDATE_PER * SD_RECORD_PER )   == 0  && dataFile  )
       {
         dataFile.print( (loop_count / (1000/UPDATE_PER * 60 )));
         dataFile.print(',');
@@ -870,31 +890,39 @@ re_eval:
 
 #ifdef WITH_SERVO
     case SERVO:
-      if (ShortPressCnt != PrevShortPressCnt)   // entering setup
-      {
-        servo_pos = Servo_adjust( servo_pos );
- 
-        lcd.home (  );
-        EncoderCnt = NTC;    // restore the current display item
-
-        // only operate the servo when setting a new position -- consumes less power and prevents the servo to run up against a stop for long
-
-      }
-
       lcd.print("Servo  *");
-      lcd.setCursor ( 0, 1 );
+      lcd.setCursor ( 0, LINE2 );
       lcd.print( servo_pos);
       lcd.print(DegSym); // degree symbol
       lcd.print("     ");
-
-#ifdef WITH_SD_CARD
-      if (dataFile)
+      
+      if (timeout == 0 )
+      timeout = loop_count + 10;
+        
+      
+      // only operate the servo when setting a new position -- consumes less power and prevents the servo to run up against a stop for long periodes
+      if (ShortPressCnt != PrevShortPressCnt)   // entering setup
       {
-        dataFile.print(",,,,,,Servo: ");
-        dataFile.println(servo_pos);
-        dataFile.flush();
+          servo_pos = Servo_adjust( servo_pos );  
+          EncoderCnt = NTC;    // go directly to teperature readout again. 
+
+       
+#ifdef WITH_SD_CARD
+        if (dataFile)
+        {
+          dataFile.print(",,,,,,Servo: ");
+          dataFile.println(servo_pos);
+          dataFile.flush();
+        }
+#endif  
+
       }
-#endif      
+      
+      if (loop_count > timeout ) // prevent the parking of the display on the Servo position
+      {
+
+          EncoderCnt= NTC;
+      }
       break;
 #endif
 
@@ -912,9 +940,14 @@ re_eval:
   TMP100_startMeasure(  );    // initiate an other measure cycle on the Stand alone Thermometer
 #endif
 
+  if (PrevEncCnt != EncoderCnt )
+    timeout = 0;
+    
   PrevEncCnt = EncoderCnt;
   PrevShortPressCnt = ShortPressCnt;
-#ifdef ALARM_A
+
+  
+#ifdef ALARMS_A
   // Blink the RED alarm led
   if (REDledAlarm)
   {

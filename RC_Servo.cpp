@@ -21,12 +21,14 @@ extern LiquidCrystal lcd;
 // ------------------------------------------
 
 static Servo servo1;   // Servo control object
+static int ServoPin;
 unsigned char servo_pos = SERVO_DEFAULT;
 
-void ServoSetup()
+void ServoSetup(int pin)
 {
   // initialize servo position -- then remove the signal again so that it doesn't work against a stop
-  servo1.attach(SERVO_PIN);
+  ServoPin = pin;
+  servo1.attach(pin);
   servo1.write(servo_pos);              // tell servo to go to position in variable 'pos'
   delay(800);    
   servo1.detach();
@@ -38,8 +40,11 @@ unsigned char Servo_adjust( unsigned char position )
   unsigned long time;
   
   ShortPressCnt = p = EncoderCnt =0;
+  lcd.setCursor ( 0, 0 );
+  lcd.print("-adjust-");
+  
   time = millis();
-  servo1.attach(SERVO_PIN);
+  servo1.attach(ServoPin);
   
   while ( !ShortPressCnt ) // exit adjust loop by button press
   {
@@ -63,8 +68,6 @@ unsigned char Servo_adjust( unsigned char position )
 
     servo1.write(position);              // tell servo to go to position in variable 'pos'
     
-    lcd.setCursor ( 0, 0 );
-    lcd.print("-adjust-");
     lcd.setCursor ( 0, 1 );
     lcd.print( position );
     lcd.print(char(223)); // degree symbol
@@ -75,6 +78,7 @@ unsigned char Servo_adjust( unsigned char position )
   }
   
   servo1.detach();
+  digitalWrite(ServoPin, LOW); // make sure that the PWM pin is off again 
   return position;
 }
 

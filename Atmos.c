@@ -10,6 +10,7 @@
 #include "Atmos.h"
 
 
+
 #define Tsl (288.15)		  // standard atmosphere temp in Kelvin at sea level
 #define Psl STD_ALT_SETTING	  // standard atmosphere pressure at sea level, aka QNE
 #define LapsR (0.0065)		// standard atmosphere lapse rate

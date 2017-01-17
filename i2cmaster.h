@@ -1,5 +1,9 @@
+#include "build_opts.h"
+#ifdef  WITH_BARO_HYG_TEMP
+
 #ifndef _I2CMASTER_H
 #define _I2CMASTER_H
+ 
 /************************************************************************* 
 * Title:    C include file for the I2C master interface 
 *           (i2cmaster.S or twimaster.c)
@@ -182,5 +186,6 @@ extern unsigned char i2c_read(unsigned char ack);
 
 
 /**@}*/
+#endif
 #endif
 

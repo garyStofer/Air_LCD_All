@@ -18,10 +18,10 @@
 #define SERVO_MIN 80       // position in degrees -- 90 is neutral 
 #define SERVO_MAX 135
 #define SERVO_DEFAULT SERVO_MAX    // startup default position 
-#define SERVO_PIN 17      // aka A3,PC3      
+  
 
 extern unsigned char servo_pos;
-extern void ServoSetup(void);
+extern void ServoSetup(int pin);
 extern unsigned char Servo_adjust( unsigned char position );
 
 #endif 
