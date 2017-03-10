@@ -16,7 +16,7 @@
 #include <Servo.h>    // This is from the Servo library 
 /* servo stuf */
 #define SERVO_MIN 80       // position in degrees -- 90 is neutral 
-#define SERVO_MAX 135
+#define SERVO_MAX 140
 #define SERVO_DEFAULT SERVO_MAX    // startup default position 
   
 

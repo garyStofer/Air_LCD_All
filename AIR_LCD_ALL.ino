@@ -25,6 +25,7 @@
 #include "RPM.h"
 #include "NTC.h"
 #include "RC_Servo.h"
+#include "HPpos.h"
 #include "AOA.h"
 #include "Encoder.h"
 
@@ -35,24 +36,52 @@
 #define LCD_ROWS 2
 #define LINE1 0
 #define LINE2 1
+// lcd special characters
+static byte DeltaChar[8] = 
+  {
+    0B00000,
+    0B00000,
+    0B00100,
+    0B01010,
+    0B10001,
+    0B11111,
+    0B00000,
+    0B00000
+  };
 /*
-// lcd special char
-byte specialchar[8] = {
-  0B00000,
-  0B11111,
-  0B11111,
-  0B11111,
-  0B11111,
-  0B11111,
-  0B11111,
+byte DeltaChar2[8] = {
+  
+  0B10000,
+  0B11000,
+  0B10100,
+  0B10010,
+  0B10100,
+  0B11000,
+  0B10000,
   0B00000
 };
-lcd.createChar(7, specialchar);  // 0 thyrough 7
-...
-  lcd.write(7);
 */
+static byte UpChar[8] = {
+  0B00100,
+  0B01110,
+  0B11111,
+  0B00100,
+  0B00100,
+  0B00100,
+  0B00100,
+  0B00000
+};
 
-
+static byte DownChar[8] = {
+  0B00100,
+  0B00100,
+  0B00100,
+  0B00100,
+  0B11111,
+  0B01110,
+  0B00100,
+  0B00000
+};
 
 #define VBUS_ADC_BW  (5.0*(14+6.8)/(1024*6.8))    //adc bit weight for voltage divider 14.0K and 6.8k to gnd.
 
@@ -109,6 +138,7 @@ enum Displays {
 #endif
 #ifdef WITH_SERVO
   SERVO,
+  HPPOS,
 #endif
   DISP_END        // this must be the last entry
 };
@@ -143,58 +173,6 @@ File dataFile;
 void setup()
 {
   unsigned err;
-  // lcd special characters
-byte DeltaChar[8] = {
-
-  0B00000,
-  0B00000,
-  0B00100,
-  0B01010,
-  0B10001,
-  0B11111,
-  0B00000,
-  0B00000
-};
-/*
-byte DeltaChar2[8] = {
-  
-  0B10000,
-  0B11000,
-  0B10100,
-  0B10010,
-  0B10100,
-  0B11000,
-  0B10000,
-  0B00000
-};
-*/
-byte UpChar[8] = {
-  0B00100,
-  0B01110,
-  0B11111,
-  0B00100,
-  0B00100,
-  0B00100,
-  0B00100,
-  0B00000
-};
-
-byte DownChar[8] = {
-  0B00100,
-  0B00100,
-  0B00100,
-  0B00100,
-  0B11111,
-  0B01110,
-  0B00100,
-  0B00000
-};
-
-
-  // Setup the Encoder pins to be inputs with pullups
-  pinMode(Enc_A_PIN, INPUT);    // Use external 10K pullup and 100nf to gnd for debounce
-  pinMode(Enc_B_PIN, INPUT);    // Use external 10K pullup and 100nf to gnd for debounce
-  pinMode(Enc_PRESS_PIN, INPUT);// Use external 10K pullup and 100nf to gnd for debounce
 
   // The two LEDs 
   pinMode(LED2_PIN, OUTPUT);    // BLUE
@@ -203,9 +181,8 @@ byte DownChar[8] = {
   pinMode(LED1_PIN, OUTPUT);    // RED
   digitalWrite( LED1_PIN, LOW);
 
-  attachInterrupt(0, ISR_KnobTurn, FALLING);    // for the rotary encoder knob rotating
-  attachInterrupt(1, ISR_ButtonPress, FALLING);    // for the rotary encoder knob push
-
+ EncoderInit( Enc_A_PIN, Enc_B_PIN, Enc_PRESS_PIN );
+ 
 #ifdef WITH_SERVO
   ServoSetup(LED2_PIN);   // The servo pulse pin is shared with the blue LED, when servo is commanded the LED lights up 
 #endif
@@ -226,15 +203,15 @@ byte DownChar[8] = {
 #endif   
    
   lcd.begin(LCD_COLS, LCD_ROWS);              // initialize the LCD columns and rows
+  lcd.createChar(DeltaSym, DeltaChar);  
+  lcd.createChar(UpSym, UpChar);  
+  lcd.createChar(DownSym, DownChar); 
 
   lcd.home ();                   // go home
  // lcd.print("AIR-LCD ");
   lcd.print("OIL TEMP ");
   lcd.setCursor ( 0, 1 );
   lcd.print("Display");
-  lcd.createChar(DeltaSym, DeltaChar);  
-  lcd.createChar(UpSym, UpChar);  
-  lcd.createChar(DownSym, DownChar); 
   
 #ifdef WITH_BARO_HYG_TEMP
   // the i2c pins -- I2C mode will overwrite this
@@ -242,6 +219,7 @@ byte DownChar[8] = {
   pinMode(19, OUTPUT);  // SCL
   digitalWrite( 18, LOW);
   digitalWrite( 19, LOW);
+  
   if ( (err = BMP085_init()) != 0)
   {
     lcd.setCursor ( 0, 0 );
@@ -290,18 +268,20 @@ byte DownChar[8] = {
 
  wdt_enable(WDTO_8S);  // set watchdog slower
 
- 
 #ifdef WITH_SD_CARD
-#define SD_RECORD_PER 60
+#define SD_RECORD_PER 30
   if (  SD.begin(SD_SS_PIN) ) // the Slave Select pin is shared with SCL from I2C, therefore SD and I2C are mutually exclusive
   {
     dataFile = SD.open("datalog.txt", FILE_WRITE);
    
     if (dataFile) 
     {
-      dataFile.print("Logger Start -- recording NTC temps every ");
+      
+      dataFile.println("Record#, ExtIn, ExtOut, Oil_IN ,--,--, MSG");
+      dataFile.print(",,,,,, Logger Start -- recording NTC temps every ");
       dataFile.print(SD_RECORD_PER);
       dataFile.println(" Seconds");
+     
       dataFile.flush();
     }
 #ifdef DEBUG    
@@ -470,8 +450,8 @@ re_eval:
   {
 #ifdef V_BUS
     case V_Bus:
-      if (timeout == 0 )
-        timeout = loop_count + 10;
+      if (timeout == 0 )			// So that the voltage diaplay times out and switches to the next higher display item
+        timeout = loop_count + (5 * 1000/UPDATE_PER);  // displays for 5 Seconds then switches off
         
       adc_val = analogRead(VBUS_ADC);
       Vbus_Volt = adc_val * VBUS_ADC_BW;
@@ -483,7 +463,7 @@ re_eval:
       {
         REDledAlarm = true;
       }
-      if (loop_count > timeout )
+      if (loop_count > timeout )	// Timeout reached -- switch to next display item.
       {
         EncoderCnt++; 
       }
@@ -798,8 +778,8 @@ re_eval:
 
 #ifdef WITH_NTC
 #define OIL_TEMP_ALARM 230    // when the red light comes on, in deg F
-#define TrendTime 80          //  trend window in 1/2 seconds intervals , i.e. 100 == 50 seconds
-#define TrendHysteresis 10    // in 1/10 deg C makes a hysteresis for the temp trend check, applies + and - , i.e 10 is +- 1 degree 
+#define TrendTime 80          //  trend window in UPDATE_PER seconds intervals , i.e. 100 == 50 seconds
+#define TrendHysteresis 5    // in 1/10 deg C makes a hysteresis for the temp trend check, applies + and - , i.e 10 is +- 1 degree 
     case NTC:
     {
       static bool disp_Delta = true;
@@ -872,7 +852,7 @@ re_eval:
       // store readings every SD_RECORD_PER seconds in SD card
       if (loop_count % (1000/UPDATE_PER * SD_RECORD_PER )   == 0  && dataFile  )
       {
-        dataFile.print( (loop_count / (1000/UPDATE_PER * 60 )));
+        dataFile.print( (loop_count / (1000/UPDATE_PER * SD_RECORD_PER )));
         dataFile.print(',');
         dataFile.print(result);
         dataFile.print(',');
@@ -892,10 +872,20 @@ re_eval:
     case SERVO:
       lcd.print("Servo  *");
       lcd.setCursor ( 0, LINE2 );
-      lcd.print( servo_pos);
-      lcd.print(DegSym); // degree symbol
-      lcd.print("     ");
-      
+      if (servo_pos == SERVO_MAX)
+      {
+        lcd.print("Open    ");
+      }
+      else if (servo_pos == SERVO_MIN) 
+      {
+        lcd.print("Closed   ");
+      }
+      else
+      {
+        lcd.print( servo_pos);
+        lcd.print(DegSym); // degree symbol
+        lcd.print("     ");
+      }
       if (timeout == 0 )
       timeout = loop_count + 10;
         
@@ -924,10 +914,45 @@ re_eval:
           EncoderCnt= NTC;
       }
       break;
-#endif
 
+
+
+	  case HPPOS:
+      lcd.print("  HP % *");
+      lcd.setCursor ( 0, LINE2 );
+      lcd.print( HPpos);
+      lcd.print("     ");
+      
+      if (timeout == 0 )
+      timeout = loop_count + 20;
+        
+      if (ShortPressCnt != PrevShortPressCnt)   // entering setup
+      {
+          HPpos = HPpos_adjust( HPpos );  
+          EncoderCnt = NTC;    // go directly to teperature readout again. 
+
+       
+#ifdef WITH_SD_CARD
+        if (dataFile)
+        {
+          dataFile.print(",,,,,,HP: ");
+          dataFile.println(HPpos);
+          dataFile.flush();
+        }
+#endif  
+
+      }
+      
+      if (loop_count > timeout ) // prevent the parking of the display on the Servo position
+      {
+
+          EncoderCnt= NTC;
+      }
+      break;
+#endif  
+ 
     default:
-      // go in the same direction as last knob input from user and re-evalute again.
+      // go in the same direction as last knob input from user and re-evaluate again.
       // will wrap around in re_eval;
       EncoderCnt += EncoderDirection;
       goto re_eval;
