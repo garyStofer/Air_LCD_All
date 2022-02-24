@@ -20,16 +20,18 @@
 // Resistance at 25C and Beta koefficient for the simpler methode	
 // NTC3 is westach 1/8 NPT sensor , Westach Temperature Sender 399S7
 //  212o at 100C, 1.750K at 37.777C , 30K at -19.62C == R25C=3000, Beta = 3902
-#define NTC3_R25C 3000// Ohms at 25C  
-#define NTC3_BETA 4000	// K(B25/100)
+// #define NTC3_R25C 3000// Ohms at 25C  WESTACH probe in RV
+// #define NTC3_BETA 4000	// K(B25/100)
+#define NTC3_R25C 10e3 // Ohms at 25C- MOUSER PN594-NTCLE213E31003FLB
+#define NTC3_BETA 3435  // K(B25/100)
 
 
-// NTC2 is little yellow bead 
+// NTC2 is little yellow bead, MOUSER PN594-NTCLE213E31003FLB
 #define NTC2_R25C 10e3 // Ohms at 25C
 #define NTC2_BETA 3435  // K(B25/100)
 
 // NTC1 same as NTC2
-#define NTC1_R25C 10e3 // Ohms at 25C
+#define NTC1_R25C 10e3 // Ohms at 25C -- MOUSER PN594-NTCLE213E31003FLB
 #define NTC1_BETA 3435  // K(B25/100)
 
  

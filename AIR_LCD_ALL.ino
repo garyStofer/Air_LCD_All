@@ -84,6 +84,7 @@ static byte DownChar[8] = {
 };
 
 #define VBUS_ADC_BW  (5.0*(14+6.8)/(1024*6.8))    //adc bit weight for voltage divider 14.0K and 6.8k to gnd.
+#define ADC_BW (5.0/1024)
 
 #define UPDATE_PER 500   // in ms second, this is the measure interval and also the LCD update interval
 #define KMpMILE 0.62137119
@@ -136,6 +137,11 @@ enum Displays {
 #ifdef WITH_NTC
   NTC,
 #endif
+
+#ifdef WITH_FUELP
+  FUELP,
+#endif
+
 #ifdef WITH_SERVO
   SERVO,
   HPPOS,
@@ -208,10 +214,13 @@ void setup()
   lcd.createChar(DownSym, DownChar); 
 
   lcd.home ();                   // go home
- // lcd.print("AIR-LCD ");
-  lcd.print("OIL TEMP ");
+  lcd.print("AIR-LCD ");
   lcd.setCursor ( 0, 1 );
+#ifdef WITH_NTC
+  lcd.print(" 3-Temp ");
+#else
   lcd.print("Display");
+#endif
   
 #ifdef WITH_BARO_HYG_TEMP
   // the i2c pins -- I2C mode will overwrite this
@@ -259,9 +268,7 @@ void setup()
   #endif
 #endif
 
-#if defined (WITH_WIND) || defined( WITH_RPM)  || defined(WITH_AOA) || !defined  WITH_BARO_HYG_TEMP
-  ;
-#else
+#if defined ( WITH_BARO_HYG_TEMP)
   if ( No_Baro && No_Hygro && No_TMP100)
     while (1);          // Since there is nothing to measure let the watchdog catch it and reboot, Maybe a sensor gets plugged in soon.
 #endif
@@ -337,6 +344,10 @@ void lcdPrintUnits(char ln, char Sym, char * units)
         lcd.print(Sym); 
         lcd.print(units);  
 }
+void lcd_clear_EOL(void)
+{
+    lcd.print("       ");
+}
 // The Arduino IDE loop function -- Called contineously
 void loop()
 {
@@ -364,14 +375,15 @@ void loop()
 
   wdt_reset();
 
- 
 
 #ifdef WITH_WIND
   WindRead();
 #endif
+
 #ifdef WITH_RPM
   RPM_Read();
 #endif
+
 #ifdef WITH_BARO_HYG_TEMP
   BMP085_Read_Process();
   SI7021_Read_Process();
@@ -402,10 +414,7 @@ void loop()
     Temp_C = TMP100_TempC;
   else
     Temp_C = -300.0 ;  // Impossible value, will never be displayed
-#endif
 
-
-#ifdef WITH_BARO_HYG_TEMP
   if ( TD_deltaC < TD_DELTA_ALARM)
   {
     if (! REDledAlarm)
@@ -505,7 +514,7 @@ re_eval:
       {
         Alt_Setting_adjust( );
         LongPressCnt = 0;
-        lcd.home (  );
+        lcd.home(  );
         EncoderCnt = Alt;    // restore the Alt display item
       }
 
@@ -732,20 +741,40 @@ re_eval:
       lcd.print( WindDir);
       lcd.print(" ");
       lcd.print(DegSym); // degree symbol
-      lcd.print("     ");
+      lcd_clear_EOL();
       t -= UPDATE_PER;  // fastest readout
 
       break;
 
 #endif
+
+
 #ifdef WITH_RPM
     case RPM:
       lcd.print("  RPM   ");
       lcd.setCursor ( 0, LINE2 );
       lcd.print( RPM_);
-      lcd.print("      ");
+      lcd_clear_EOL();
       break;
 #endif
+
+
+#ifdef WITH_FUELP
+    case FUELP:
+      lcd.print("FUEL psi");
+      lcd.setCursor ( 0, LINE2 );
+      adc_val = analogRead(1);
+      result = adc_val * ADC_BW;
+      // sensor has 0.5V offest at 0 PSI and reads 4.5V at 15 PSI
+#define SENSOR_RANGE 100.0
+      result2 = (result -0.46)*SENSOR_RANGE/3.950;
+      lcd.print( result2);
+      lcd_clear_EOL();
+      break;
+
+
+#endif
+
 
 #ifdef WITH_AOA
     case AOA:   // This is basically a potentiometer position readout
@@ -761,7 +790,7 @@ re_eval:
         
       lcd.print( axa);
       lcd.print(DegSym); // degree symbol
-      lcd.print("     ");
+      lcd_clear_EOL();
 
       if ( axa > 14 )
         digitalWrite( LED1_PIN, HIGH);
@@ -865,8 +894,9 @@ re_eval:
       }
 #endif      
       break;
+	}  
 #endif
-    }
+    
 
 #ifdef WITH_SERVO
     case SERVO:
@@ -884,7 +914,7 @@ re_eval:
       {
         lcd.print( servo_pos);
         lcd.print(DegSym); // degree symbol
-        lcd.print("     ");
+        lcd_clear_EOL();
       }
       if (timeout == 0 )
       timeout = loop_count + 10;
@@ -921,7 +951,7 @@ re_eval:
       lcd.print("  HP % *");
       lcd.setCursor ( 0, LINE2 );
       lcd.print( HPpos);
-      lcd.print("     ");
+      lcd_clear_EOL();
       
       if (timeout == 0 )
       timeout = loop_count + 20;
